@@ -326,7 +326,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   cam: {fileID: 963194227}
-  mouseSensitivity: 30
+  mouseSensitivity: 0.1
 --- !u!114 &2591102146379969231
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -340,10 +340,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   maxHealth: 100
-  netHealth:
-    m_InternalValue: 100
-  netTeamID:
-    m_InternalValue: 0
+  currentHealth: 100
+  teamID: 0
   isDead: 0
   OnDeath:
     m_PersistentCalls:
