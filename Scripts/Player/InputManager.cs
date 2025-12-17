@@ -1,8 +1,7 @@
 ﻿using UnityEngine;
 using UnityEngine.InputSystem;
-using Unity.Netcode;
 
-public class InputManager : NetworkBehaviour
+public class InputManager : MonoBehaviour
 {
     private PlayerInput playerInput;
     private PlayerInput.OnFootActions onFoot;
@@ -12,16 +11,6 @@ public class InputManager : NetworkBehaviour
     private PlayerInteraction interaction;
     private BombCarrier carrier;
     private PlayerHealth health;
-
-    public override void OnNetworkSpawn()
-    {
-        // Si no soy el dueño, me apago para no controlar a otros
-        if (!IsOwner)
-        {
-            this.enabled = false;
-            return;
-        }
-    }
 
     void Awake()
     {
@@ -51,13 +40,11 @@ public class InputManager : NetworkBehaviour
 
     void FixedUpdate()
     {
-        if (!IsOwner) return;
         motor.ProcessMove(onFoot.Movement.ReadValue<Vector2>());
     }
 
     private void LateUpdate()
     {
-        if (!IsOwner) return;
         look.ProcessLook(onFoot.Look.ReadValue<Vector2>());
     }
 

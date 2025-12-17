@@ -1,19 +1,15 @@
 using UnityEngine;
 using UnityEngine.Events;
 using System.Collections;
-using Unity.Netcode;
 
-public class PlayerHealth : NetworkBehaviour
+public class PlayerHealth : MonoBehaviour
 {
     [Header("Configuración de Salud")]
     public float maxHealth = 100f;
 
-    // --- VARIABLES DE RED ---
-    public NetworkVariable<float> netHealth = new NetworkVariable<float>(100f);
-    public NetworkVariable<int> netTeamID = new NetworkVariable<int>(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-
-    public int teamID { get { return netTeamID.Value; } }
-    public float currentHealth { get { return netHealth.Value; } }
+    // --- VARIABLES NORMALES (ANTES RED) ---
+    public float currentHealth = 100f;
+    public int teamID = 0;
 
     public bool isDead = false;
     private Transform lastAttacker;
@@ -25,39 +21,33 @@ public class PlayerHealth : NetworkBehaviour
     // DEBUG para InputManager
     public Transform testKiller;
 
-    public override void OnNetworkSpawn()
+    void Start()
     {
+        currentHealth = maxHealth;
         UpdateVisuals();
         UpdateUI();
-        netHealth.OnValueChanged += (oldVal, newVal) => UpdateUI();
 
-        if (IsOwner && UIManager.Instance != null)
+        if (UIManager.Instance != null)
             UIManager.Instance.ToggleGameplayHUD(true);
     }
 
     public void OnDebugKill()
-    {
-        if (IsServer) TakeDamage(maxHealth * 10f);
-        else RequestSuicideServerRpc();
-    }
-
-    [ServerRpc]
-    private void RequestSuicideServerRpc()
     {
         TakeDamage(maxHealth * 10f);
     }
 
     public void TakeDamage(float amount, Transform attacker = null)
     {
-        if (!IsServer) return;
+        if (isDead) return;
 
         if (attacker != null) lastAttacker = attacker;
 
-        netHealth.Value -= amount;
+        currentHealth -= amount;
+        UpdateUI();
 
-        if (netHealth.Value <= 0 && !isDead)
+        if (currentHealth <= 0 && !isDead)
         {
-            netHealth.Value = 0;
+            currentHealth = 0;
             Die();
         }
     }
@@ -66,14 +56,8 @@ public class PlayerHealth : NetworkBehaviour
     private void Die()
     {
         isDead = true;
-        DieClientRpc();
 
-        if (GameManager.Instance != null) StartCoroutine(WaitAndRespawn());
-    }
-
-    [ClientRpc]
-    private void DieClientRpc()
-    {
+        // Lógica de Muerte Local
         OnDeath?.Invoke();
 
         if (TryGetComponent(out CharacterController cc)) cc.enabled = false;
@@ -85,31 +69,27 @@ public class PlayerHealth : NetworkBehaviour
         if (TryGetComponent(out InputManager inputMgr)) inputMgr.enabled = false;
         if (TryGetComponent(out PlayerLook look)) look.enabled = false;
 
-        if (UIManager.Instance != null && IsOwner) UIManager.Instance.ToggleGameplayHUD(false);
+        if (UIManager.Instance != null) UIManager.Instance.ToggleGameplayHUD(false);
+
+        if (GameManager.Instance != null) StartCoroutine(WaitAndRespawn());
     }
 
     IEnumerator WaitAndRespawn()
     {
         yield return new WaitForSeconds(4.0f);
 
-        // --- CORRECCIÓN: SOLO RESPAWNEAR SI LA RONDA SIGUE ACTIVA ---
-        if (GameManager.Instance != null && GameManager.Instance.isRoundActive.Value)
+        if (GameManager.Instance != null && GameManager.Instance.isRoundActive)
         {
             GameManager.Instance.RespawnSinglePlayer(this);
         }
-        // Si la ronda terminó, no hacemos nada. El GameManager nos revivirá al iniciar la siguiente.
     }
 
     public void ResetPlayer()
     {
         isDead = false;
-        if (IsServer) netHealth.Value = maxHealth;
-        ResetPlayerClientRpc();
-    }
+        currentHealth = maxHealth;
 
-    [ClientRpc]
-    private void ResetPlayerClientRpc()
-    {
+        // Lógica de Reseteo Local
         if (TryGetComponent(out CharacterController cc)) cc.enabled = false;
         if (TryGetComponent(out PlayerMotor motor)) motor.enabled = false;
         if (TryGetComponent(out RagdollManager ragdoll)) ragdoll.DeactivateRagdoll();
@@ -117,15 +97,16 @@ public class PlayerHealth : NetworkBehaviour
         // Reactivar Input
         if (TryGetComponent(out InputManager inputMgr)) inputMgr.enabled = true;
 
-        if (TryGetComponent(out PlayerLook look) && IsOwner)
+        if (TryGetComponent(out PlayerLook look))
         {
             look.enabled = true;
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
         }
 
-        if (UIManager.Instance != null && IsOwner) UIManager.Instance.ToggleGameplayHUD(true);
+        if (UIManager.Instance != null) UIManager.Instance.ToggleGameplayHUD(true);
         UpdateVisuals();
+        UpdateUI();
         StartCoroutine(ReviveSequence());
     }
 
@@ -144,7 +125,12 @@ public class PlayerHealth : NetworkBehaviour
     }
     private void UpdateUI()
     {
-        if (IsOwner && UIManager.Instance != null) UIManager.Instance.UpdateHealth(netHealth.Value, maxHealth);
+        if (UIManager.Instance != null) UIManager.Instance.UpdateHealth(currentHealth, maxHealth);
     }
-    public void Heal(float amount) { if (IsServer) netHealth.Value += amount; }
+    public void Heal(float amount)
+    {
+        currentHealth += amount;
+        if (currentHealth > maxHealth) currentHealth = maxHealth;
+        UpdateUI();
+    }
 }

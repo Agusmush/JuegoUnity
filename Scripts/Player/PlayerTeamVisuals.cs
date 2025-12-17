@@ -24,7 +24,7 @@ public class PlayerTeamVisuals : MonoBehaviour
         // Seguridad: Si no encontró el script de salud o el renderer, no hace nada
         if (playerHealth == null || targetRenderer == null) return;
 
-        if (playerHealth.teamID == -1) // Equipo A
+        if (playerHealth.teamID == 0) // Equipo A
         {
             targetRenderer.material = materialTeamA;
         }

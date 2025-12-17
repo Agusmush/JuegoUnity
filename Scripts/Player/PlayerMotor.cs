@@ -1,9 +1,8 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using Unity.Netcode;
 
-public class PlayerMotor : NetworkBehaviour
+public class PlayerMotor : MonoBehaviour
 {
     public CharacterController controller;
 
@@ -43,9 +42,6 @@ public class PlayerMotor : NetworkBehaviour
 
     void Update()
     {
-        // 1. FILTRO DE DUEÑO: Solo gestionamos timers locales
-        if (!IsOwner) return;
-
         isGrounded = controller.isGrounded;
 
         bool underImpact = impactLockoutTimer > 0;
@@ -62,7 +58,6 @@ public class PlayerMotor : NetworkBehaviour
     // Esta función la llama el InputManager
     public void ProcessMove(Vector2 input)
     {
-        if (!IsOwner) return;
         if (!isActiveAndEnabled) return;
         if (controller == null || !controller.enabled) return;
 
@@ -162,14 +157,11 @@ public class PlayerMotor : NetworkBehaviour
 
     public void SetCrouch(bool value)
     {
-        if (!IsOwner) return;
         isCrouching = value;
     }
 
     public void Jump()
     {
-        if (!IsOwner) return;
-
         if (isGrounded && impactLockoutTimer <= 0)
         {
             velocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
