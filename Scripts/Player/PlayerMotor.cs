@@ -25,11 +25,14 @@ public class PlayerMotor : MonoBehaviour
     public float jumpHeight = 3.0f;
     public float airStraffleSmooth = 0.15f;
 
+    // --- NUEVO: Factores de Peso ---
     [HideInInspector] public float speedFactor = 1f;
+    [HideInInspector] public float jumpFactor = 1f;
 
     private Vector3 velocity;
     private bool isGrounded;
     private bool isCrouching;
+    private PlayerAudio playerAudio;
 
     private Transform camHolder;
     private float impactLockoutTimer = 0f;
@@ -38,10 +41,17 @@ public class PlayerMotor : MonoBehaviour
     {
         controller = GetComponent<CharacterController>();
         if (Camera.main != null) camHolder = Camera.main.transform;
+
+        // Aseguramos que los factores empiecen en 1 (normal)
+        speedFactor = 1f;
+        jumpFactor = 1f;
+        playerAudio = GetComponent<PlayerAudio>();
     }
 
     void Update()
     {
+        if (controller == null) return;
+
         isGrounded = controller.isGrounded;
 
         bool underImpact = impactLockoutTimer > 0;
@@ -102,7 +112,7 @@ public class PlayerMotor : MonoBehaviour
 
         float curMaxSpeed = isCrouching ? crouchSpeed : maxSpeed;
 
-        // Aplicamos speedFactor (peso de la bomba)
+        // --- APLICAMOS SPEED FACTOR (PESO) ---
         curMaxSpeed *= speedFactor;
 
         Accelerate(wishDir, curMaxSpeed, groundAccel, inputMag);
@@ -162,13 +172,16 @@ public class PlayerMotor : MonoBehaviour
 
     public void Jump()
     {
+        // --- APLICAMOS JUMP FACTOR (PESO) ---
         if (isGrounded && impactLockoutTimer <= 0)
         {
-            velocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
+            float finalJumpHeight = jumpHeight * jumpFactor;
+            velocity.y = Mathf.Sqrt(finalJumpHeight * -2f * gravity);
+            if (playerAudio != null) playerAudio.PlayJumpSound();
         }
     }
 
-    // --- FUNCIONES NECESARIAS PARA BOMBA Y COHETES ---
+    // --- FUNCIONES DE EXPLOSIÓN ---
 
     public void ApplyKnockback(Vector3 explosionPos, float explosionForce, float explosionRadius)
     {
@@ -203,6 +216,9 @@ public class PlayerMotor : MonoBehaviour
         velocity = Vector3.zero;
         impactLockoutTimer = 0f;
         isCrouching = false;
+
+        // Reseteamos también los factores de peso
         speedFactor = 1f;
+        jumpFactor = 1f;
     }
 }

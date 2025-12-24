@@ -13,84 +13,187 @@ public class UIManager : MonoBehaviour
     public TextMeshProUGUI scoreBText;
     public TextMeshProUGUI stateText;
 
-    [Header("Timers de Bomba (5s)")]
-    public TextMeshProUGUI bombTimerAText;
-    public TextMeshProUGUI bombTimerBText;
+    [Header("Barra de Tensión")]
+    public Slider bombSlider;
+    public Image bombHandleImage;  // El círculo que se mueve (Handle)
+    public TextMeshProUGUI centerWarningText;
+
+    [Header("Timers de Bomba (10s)")]
+    public TextMeshProUGUI bombTimerAText; // Lado Izquierdo (Azul)
+    public TextMeshProUGUI bombTimerBText; // Lado Derecho (Rojo)
+
+    [Header("Jugador & HUD")]
+    public GameObject gameplayHUDContainer; // Contenedor del HUD
+    public Image healthBarFill;
+    public TextMeshProUGUI healthNumText;
+    public Gradient healthGradient;
 
     [Header("Colores")]
-    public Color safeColor = new Color(1, 1, 1, 0.2f);
-    public Color dangerColor = Color.red;
+    public Color safeColor = new Color(0.8f, 0.8f, 0.8f, 0.5f); // Gris clarito (Standby)
+    public Color teamAColor = Color.blue; // Equipo A (Izquierda)
+    public Color teamBColor = Color.red;  // Equipo B (Derecha)
+
+    public Color suddenDeathColor = Color.yellow;
     public Color snapshotColor = Color.cyan;
     public Color normalTimeColor = Color.white;
     public Color criticalTimeColor = Color.red;
 
-    [Header("Jugador")]
-    public Image healthBarFill;
-    public TextMeshProUGUI healthNumText;
-    public GameObject gameplayHUDContainer; // Arrastra el objeto "GameplayHUD" aquí
+    [Header("Pantalla Final")]
+    public GameObject victoryPanel;
+    public TextMeshProUGUI victoryText;
 
-    [Header("Colores de Salud")]
-    public Gradient healthGradient;
-    // Variables internas para recordar posiciones originales (Fix del texto flotante)
-    private Vector3 originalTimerScale;
+    // Variables Internas
     private Vector3 originalPosBombA;
     private Vector3 originalPosBombB;
-
+    private Vector3 originalTimerScale;
     private Coroutine resetCoroutineA;
     private Coroutine resetCoroutineB;
 
-
-
-    private void Awake()
-    {
-        if (Instance == null) Instance = this;
-    }
+    private void Awake() { if (Instance == null) Instance = this; }
 
     private void Start()
     {
         if (timerText != null) originalTimerScale = timerText.transform.localScale;
-
-        // GUARDAMOS LAS POSICIONES ORIGINALES PARA QUE NO SE VAYAN CAMINANDO
         if (bombTimerAText != null) originalPosBombA = bombTimerAText.transform.localPosition;
         if (bombTimerBText != null) originalPosBombB = bombTimerBText.transform.localPosition;
 
-        if (stateText != null) stateText.gameObject.SetActive(false);
-        ToggleGameplayHUD(false);
+        if (centerWarningText) centerWarningText.gameObject.SetActive(false);
+        if (stateText) stateText.gameObject.SetActive(false);
+        if (victoryPanel != null) victoryPanel.SetActive(false);
 
-        // Ocultar timers de bomba al inicio del juego
-        HideBombTimers();
+        ToggleGameplayHUD(false); // Ocultar HUD al inicio
+        ResetBombTimersVisuals(); // Poner timers en gris
     }
 
-    // --- MÉTODOS DE VISIBILIDAD BOMBA ---
-
-    public void HideBombTimers()
+    private void Update()
     {
-        if (bombTimerAText) bombTimerAText.gameObject.SetActive(false);
-        if (bombTimerBText) bombTimerBText.gameObject.SetActive(false);
+        UpdateSliderPosition();
     }
 
-    public void ShowBombTimers()
+    // =========================================================
+    //              LÓGICA DE BARRA Y SLIDER
+    // =========================================================
+
+    private void UpdateSliderPosition()
     {
-        // Los mostramos en estado "Neutro/Listo"
-        if (bombTimerAText)
+        if (bombSlider == null) return;
+
+        BombController bomb = FindObjectOfType<BombController>();
+        if (bomb != null)
         {
-            bombTimerAText.text = "5.00";
-            bombTimerAText.color = safeColor;
-            bombTimerAText.transform.localPosition = originalPosBombA; // Reset posición
-            bombTimerAText.gameObject.SetActive(true);
-        }
-        if (bombTimerBText)
-        {
-            bombTimerBText.text = "5.00";
-            bombTimerBText.color = safeColor;
-            bombTimerBText.transform.localPosition = originalPosBombB; // Reset posición
-            bombTimerBText.gameObject.SetActive(true);
+            float mapLimit = 50f;
+            float t = Mathf.InverseLerp(-mapLimit, mapLimit, bomb.transform.position.z);
+            bombSlider.value = t;
+
+            // Colorear el Círculo (Handle) según posición
+            if (bombHandleImage != null)
+            {
+                if (t < 0.45f) bombHandleImage.color = teamAColor;      // Gana A (Azul)
+                else if (t > 0.55f) bombHandleImage.color = teamBColor; // Gana B (Rojo)
+                else bombHandleImage.color = Color.white;               // Centro
+            }
         }
     }
 
-    // --- TIMERS PRINCIPALES (Dos modos distintos) ---
+    // =========================================================
+    //              LÓGICA DE TIMERS DE BOMBA
+    // =========================================================
 
-    // Modo 1: Preparación (Blanco, Enteros, Sin Pánico)
+    public void UpdateBombTimers(float timeRemaining, int activeSide, bool isGracePeriod)
+    {
+        float displayTime = Mathf.Max(0f, timeRemaining);
+        string formattedTime = displayTime.ToString("F2");
+
+        // 1. SI ES CENTRO (LADO 0) - Muerte Súbita o Espera
+        if (activeSide == 0)
+        {
+            SetTimerStandby(bombTimerAText);
+            SetTimerStandby(bombTimerBText);
+
+            if (centerWarningText)
+            {
+                if (isGracePeriod)
+                {
+                    centerWarningText.gameObject.SetActive(false);
+                }
+                else
+                {
+                    centerWarningText.gameObject.SetActive(true);
+                    centerWarningText.text = "¡MUERTE SÚBITA!\n" + formattedTime;
+                    centerWarningText.color = Color.Lerp(suddenDeathColor, Color.red, Mathf.PingPong(Time.time * 10, 1));
+                }
+            }
+        }
+        // 2. SI EL EQUIPO A (AZUL) TIENE LA BOMBA (-1)
+        else if (activeSide == -1)
+        {
+            if (centerWarningText) centerWarningText.gameObject.SetActive(false);
+
+            ActivateTimer(bombTimerAText, formattedTime, teamAColor, timeRemaining);
+            SetTimerStandby(bombTimerBText);
+        }
+        // 3. SI EL EQUIPO B (ROJO) TIENE LA BOMBA (1)
+        else if (activeSide == 1)
+        {
+            if (centerWarningText) centerWarningText.gameObject.SetActive(false);
+
+            SetTimerStandby(bombTimerAText);
+            ActivateTimer(bombTimerBText, formattedTime, teamBColor, timeRemaining);
+        }
+    }
+
+    // Helpers Visuales
+    void ActivateTimer(TextMeshProUGUI txt, string timeStr, Color col, float rawTime)
+    {
+        if (txt == null) return;
+        txt.gameObject.SetActive(true);
+        txt.text = timeStr;
+        txt.color = col;
+
+        if (rawTime < 3.0f)
+            txt.transform.localPosition = (txt == bombTimerAText ? originalPosBombA : originalPosBombB) + (Vector3)(Random.insideUnitCircle * 2f);
+        else
+            txt.transform.localPosition = (txt == bombTimerAText ? originalPosBombA : originalPosBombB);
+    }
+
+    void SetTimerStandby(TextMeshProUGUI txt)
+    {
+        if (txt == null) return;
+        txt.gameObject.SetActive(true);
+        txt.text = "10.00";
+        txt.color = safeColor;
+        txt.transform.localPosition = (txt == bombTimerAText ? originalPosBombA : originalPosBombB);
+    }
+
+    public void ResetBombTimersVisuals()
+    {
+        SetTimerStandby(bombTimerAText);
+        SetTimerStandby(bombTimerBText);
+        if (centerWarningText) centerWarningText.gameObject.SetActive(false);
+    }
+
+    public void OnBombSideChanged(int newActiveSide)
+    {
+        if (newActiveSide == 1 && resetCoroutineA != null) StopCoroutine(resetCoroutineA);
+        if (newActiveSide == -1 && resetCoroutineB != null) StopCoroutine(resetCoroutineB);
+
+        if (newActiveSide == 1) resetCoroutineA = StartCoroutine(SnapshotSequence(bombTimerAText, originalPosBombA));
+        else if (newActiveSide == -1) resetCoroutineB = StartCoroutine(SnapshotSequence(bombTimerBText, originalPosBombB));
+    }
+
+    IEnumerator SnapshotSequence(TextMeshProUGUI timerText, Vector3 originalPos)
+    {
+        timerText.transform.localPosition = originalPos;
+        timerText.color = snapshotColor;
+        yield return new WaitForSeconds(0.1f);
+        timerText.color = safeColor;
+        timerText.text = "10.00";
+    }
+
+    // =========================================================
+    //              TIMERS PRINCIPALES & SCORE
+    // =========================================================
+
     public void UpdatePrepTimer(float currentTime)
     {
         timerText.text = Mathf.CeilToInt(currentTime).ToString("0");
@@ -98,130 +201,23 @@ public class UIManager : MonoBehaviour
         timerText.transform.localScale = originalTimerScale;
     }
 
-    // Modo 2: Gameplay (Rojo, Decimales, Pánico)
     public void UpdateGameTimer(float currentTime)
     {
         if (currentTime > 9f)
         {
-            // TAMAÑO NORMAL
             timerText.text = Mathf.CeilToInt(currentTime).ToString("0");
             timerText.color = normalTimeColor;
             timerText.transform.localScale = originalTimerScale;
         }
         else
         {
-            // TAMAÑO REDUCIDO + LATIDO
             timerText.text = Mathf.Max(0, currentTime).ToString("F2");
             timerText.color = criticalTimeColor;
-
-            // Calculamos el latido (PingPong)
             float heartbeat = 1f + Mathf.PingPong(Time.time * 5f, 0.2f);
-
-            // FACTOR DE REDUCCIÓN: 0.75f (75% del tamaño original)
-            // Ajusta este número si quieres que sea más chico (0.6f) o más grande (0.8f)
-            float shrinkFactor = 0.75f;
-
-            // Aplicamos: Escala Original * Reducción * Latido
-            timerText.transform.localScale = originalTimerScale * shrinkFactor * heartbeat;
+            timerText.transform.localScale = originalTimerScale * 0.75f * heartbeat;
         }
     }
 
-    // --- TIMERS DE LA BOMBA (LÓGICA BLINDADA) ---
-
-    public void UpdateBombTimers(float timeRemaining, int activeSide)
-    {
-        // FIX 1: Clampear a 0. Nunca permitimos que baje de 0.00 visualmente
-        float displayTime = Mathf.Max(0f, timeRemaining);
-        string formattedTime = displayTime.ToString("F2");
-
-        // SI EL EQUIPO A ESTÁ EN PELIGRO (-1)
-        if (activeSide == -1)
-        {
-            if (resetCoroutineA != null) StopCoroutine(resetCoroutineA);
-
-            // FIX 2: ¡Resurrección! Forzamos que sea visible por si el parpadeo lo dejó apagado
-            bombTimerAText.enabled = true;
-
-            bombTimerAText.text = formattedTime;
-            bombTimerAText.color = dangerColor;
-            bombTimerAText.gameObject.SetActive(true);
-
-            // Fix del temblor
-            if (timeRemaining < 2.0f)
-                bombTimerAText.transform.localPosition = originalPosBombA + (Vector3)(Random.insideUnitCircle * 2f);
-            else
-                bombTimerAText.transform.localPosition = originalPosBombA;
-        }
-        // SI EL EQUIPO B ESTÁ EN PELIGRO (1)
-        else if (activeSide == 1)
-        {
-            if (resetCoroutineB != null) StopCoroutine(resetCoroutineB);
-
-            // FIX 2: ¡Resurrección!
-            bombTimerBText.enabled = true;
-
-            bombTimerBText.text = formattedTime;
-            bombTimerBText.color = dangerColor;
-            bombTimerBText.gameObject.SetActive(true);
-
-            // Fix del temblor
-            if (timeRemaining < 2.0f)
-                bombTimerBText.transform.localPosition = originalPosBombB + (Vector3)(Random.insideUnitCircle * 2f);
-            else
-                bombTimerBText.transform.localPosition = originalPosBombB;
-        }
-        else
-        {
-            // Zona Neutral: Asegurar posiciones
-            bombTimerAText.transform.localPosition = originalPosBombA;
-            bombTimerBText.transform.localPosition = originalPosBombB;
-
-            // Asegurar visibilidad si queremos que se vean grises
-            bombTimerAText.enabled = true;
-            bombTimerBText.enabled = true;
-        }
-    }
-
-    public void OnBombSideChanged(int newActiveSide)
-    {
-        if (newActiveSide == 1) // Pasó a B -> A se salvó
-        {
-            if (resetCoroutineA != null) StopCoroutine(resetCoroutineA);
-            resetCoroutineA = StartCoroutine(SnapshotSequence(bombTimerAText, originalPosBombA));
-        }
-        else if (newActiveSide == -1) // Pasó a A -> B se salvó
-        {
-            if (resetCoroutineB != null) StopCoroutine(resetCoroutineB);
-            resetCoroutineB = StartCoroutine(SnapshotSequence(bombTimerBText, originalPosBombB));
-        }
-    }
-
-    IEnumerator SnapshotSequence(TextMeshProUGUI timerText, Vector3 originalPos)
-    {
-        timerText.transform.localPosition = originalPos;
-        timerText.color = snapshotColor;
-
-        // Parpadeo rápido
-        for (int i = 0; i < 3; i++)
-        {
-            timerText.enabled = false;
-            yield return new WaitForSeconds(0.1f);
-
-            // Verificación de seguridad: Si la corrutina fue interrumpida externamente, morimos aquí.
-            // Pero si sigue viva, encendemos.
-            timerText.enabled = true;
-            yield return new WaitForSeconds(0.1f);
-        }
-
-        yield return new WaitForSeconds(1.0f);
-
-        // Estado final seguro
-        timerText.enabled = true; // Seguridad extra
-        timerText.text = "5.00";
-        timerText.color = safeColor;
-    }
-
-    // ... Resto de métodos (Score, Health, State) IGUAL QUE ANTES ...
     public void UpdateScore(int scoreA, int scoreB)
     {
         scoreAText.text = scoreA.ToString();
@@ -243,6 +239,10 @@ public class UIManager : MonoBehaviour
         stateText.gameObject.SetActive(false);
     }
 
+    // =========================================================
+    //              SALUD Y HUD (LO QUE FALTABA)
+    // =========================================================
+
     public void ToggleGameplayHUD(bool isVisible)
     {
         if (gameplayHUDContainer != null)
@@ -251,22 +251,41 @@ public class UIManager : MonoBehaviour
 
     public void UpdateHealth(float current, float max)
     {
-        // 1. Actualizar texto y color del texto
         float percentage = current / max;
 
+        // Texto numérico
         if (healthNumText != null)
         {
             healthNumText.text = Mathf.CeilToInt(current).ToString();
-            // El texto también se pone rojo si quieres
             healthNumText.color = healthGradient.Evaluate(percentage);
         }
 
-        // 2. Actualizar Barra y su Color
+        // Barra de vida
         if (healthBarFill != null)
         {
             healthBarFill.fillAmount = percentage;
-            // MAGIA: El gradiente elige el color exacto basado en el %
             healthBarFill.color = healthGradient.Evaluate(percentage);
         }
+    }
+
+    public void ShowVictoryScreen(string winnerName, Color winnerColor)
+    {
+        // 1. Apagar el texto de estado general (el amarillo que dice "VICTORIA: ...")
+        // para que no se mezcle con el panel nuevo.
+        if (stateText != null) stateText.gameObject.SetActive(false);
+
+        // 2. Mostrar el Panel de Victoria
+        if (victoryPanel != null)
+        {
+            victoryPanel.SetActive(true);
+            if (victoryText != null)
+            {
+                victoryText.text = "¡" + winnerName + " GANA!"; // Agregué signos de exclamación
+                victoryText.color = winnerColor;
+            }
+        }
+
+        // 3. Ocultar HUD de juego
+        ToggleGameplayHUD(false);
     }
 }
