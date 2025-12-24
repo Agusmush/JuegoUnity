@@ -6,7 +6,6 @@ public class PlayerAudio : MonoBehaviour
     [Tooltip("Distancia en metros para dar un paso. Auméntalo si suenan muy rápido.")]
     public float stepDistance = 1.8f;
 
-    // Acumulador privado (no tocar en inspector)
     private float distanceTraveled;
 
     [Header("Clips de Audio")]
@@ -34,28 +33,23 @@ public class PlayerAudio : MonoBehaviour
 
     void HandleFootsteps()
     {
-        if (cc == null || !cc.isGrounded) return;
+        // CORRECCIÓN AQUÍ:
+        // Añadimos "!cc.enabled". Si el RagdollManager apagó el controller, salimos.
+        if (cc == null || !cc.enabled || !cc.isGrounded) return;
 
-        // Calculamos la velocidad horizontal real
         Vector2 velocityHorizontal = new Vector2(cc.velocity.x, cc.velocity.z);
         float speed = velocityHorizontal.magnitude;
 
-        // Si hay movimiento...
         if (speed > 0.1f)
         {
-            // FÓRMULA MÁGICA: Distancia = Velocidad * Tiempo
-            // Acumulamos cuántos metros avanzó en este frame
             distanceTraveled += speed * Time.deltaTime;
 
-            // Si ya acumuló suficiente distancia para un paso...
             if (distanceTraveled >= stepDistance)
             {
-                PlayRandomStep(speed); // Pasamos la velocidad para ajustar volumen
-                distanceTraveled = 0f; // Reseteamos el contador de metros
+                PlayRandomStep(speed);
+                distanceTraveled = 0f;
             }
         }
-        // NOTA: No reseteamos distanceTraveled a 0 si se detiene. 
-        // Así, si diste medio paso y paraste, al volver a moverte completarás ese paso.
     }
 
     void PlayRandomStep(float currentSpeed)
@@ -65,14 +59,9 @@ public class PlayerAudio : MonoBehaviour
         int index = Random.Range(0, stepClips.Length);
         AudioClip clip = stepClips[index];
 
-        // Pitch aleatorio para variedad
         audioSource.pitch = Random.Range(0.9f, 1.1f);
 
-        // VOLUMEN DINÁMICO:
-        // Si vas lento (agachado), suena más pasito. Si corres, suena fuerte.
-        // Asumiendo que tu velocidad de correr es aprox 6 o 7:
         float volumeFactor = Mathf.Clamp01(currentSpeed / 6f);
-        // Nos aseguramos que nunca baje de 0.3 para que siempre se escuche algo
         float finalVolume = Mathf.Max(0.3f, volumeFactor);
 
         audioSource.PlayOneShot(clip, finalVolume);
@@ -80,17 +69,16 @@ public class PlayerAudio : MonoBehaviour
 
     void HandleLanding()
     {
-        if (cc == null) return;
+        // CORRECCIÓN AQUÍ TAMBIÉN:
+        if (cc == null || !cc.enabled) return;
 
         if (!wasGrounded && cc.isGrounded)
         {
-            // Resetear el ciclo de pasos al caer para que no suene doble paso
             distanceTraveled = 0;
 
             if (landClip != null)
             {
                 audioSource.pitch = 1f;
-                // Volumen del golpe depende de qué tan rápido caíste (opcional)
                 audioSource.PlayOneShot(landClip, 0.8f);
             }
         }
@@ -100,6 +88,9 @@ public class PlayerAudio : MonoBehaviour
 
     public void PlayJumpSound()
     {
+        // Opcional: Evitar saltar si estamos muertos (aunque el input ya debería estar bloqueado)
+        if (cc != null && !cc.enabled) return;
+
         if (jumpClip != null)
         {
             audioSource.pitch = 1f;

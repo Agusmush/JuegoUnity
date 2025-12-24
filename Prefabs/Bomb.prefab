@@ -117,7 +117,7 @@ Rigidbody:
   m_IsKinematic: 0
   m_Interpolate: 1
   m_Constraints: 0
-  m_CollisionDetection: 1
+  m_CollisionDetection: 2
 --- !u!114 &264197187
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -146,7 +146,7 @@ MonoBehaviour:
   pitchRiseSpeed: 0.1
   pitchDropSpeed: 0.4
   globalStressThreshold: 10
-  switchClip: {fileID: 0}
+  switchClip: {fileID: 8300000, guid: 5f934965ce16eab42a34127636de506a, type: 3}
   reliefSafe: {fileID: 8300000, guid: 2b87177ab44d4484ca8cd7836ad19e44, type: 3}
   reliefMedium: {fileID: 8300000, guid: 57e240e3a6d5d0544934dbd9e886a9ab, type: 3}
   reliefCritical: {fileID: 8300000, guid: da3c81c8f6035b54884eb9c1d6bcd13a, type: 3}
@@ -158,9 +158,9 @@ MonoBehaviour:
   trail: {fileID: 0}
   meshRenderer: {fileID: 0}
   outlineColorProperty: _EmissionColor
-  minExplosionForce: 5000
-  maxExplosionForce: 50000
-  explosionUpwardModifier: 3
+  minExplosionForce: 3000
+  maxExplosionForce: 30000
+  explosionUpwardModifier: 5
 --- !u!114 &264197192
 MonoBehaviour:
   m_ObjectHideFlags: 0

@@ -1,5 +1,3 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
 public class CameraShake : MonoBehaviour
@@ -10,8 +8,8 @@ public class CameraShake : MonoBehaviour
     private float shakeMagnitude = 0f;
     private float dampingSpeed = 1.0f;
 
-    // Esta es la variable que leerán los otros scripts
-    public Vector3 CurrentShakeOffset { get; private set; }
+    // Ahora esto representa ROTACIÓN (X=Pitch, Y=Yaw, Z=Roll)
+    public Vector3 CurrentShakeRotation { get; private set; }
 
     void Awake()
     {
@@ -22,23 +20,28 @@ public class CameraShake : MonoBehaviour
     {
         if (shakeDuration > 0)
         {
-            // Generamos el desplazamiento aleatorio
-            CurrentShakeOffset = Random.insideUnitSphere * shakeMagnitude;
+            // Generamos ruido Perlin o Random para la rotación
+            // X (Arriba/Abajo), Y (Izquierda/Derecha), Z (Inclinación - Muy importante para explosiones)
+            float x = Random.Range(-1f, 1f) * shakeMagnitude;
+            float y = Random.Range(-1f, 1f) * shakeMagnitude;
+            float z = Random.Range(-1f, 1f) * shakeMagnitude * 1.5f; // El Roll suele ser más fuerte
 
-            // Reducir tiempo
+            CurrentShakeRotation = new Vector3(x, y, z);
+
             shakeDuration -= Time.deltaTime * dampingSpeed;
         }
         else
         {
-            // Si no hay shake, el offset es cero
-            CurrentShakeOffset = Vector3.zero;
+            CurrentShakeRotation = Vector3.zero;
         }
     }
 
     public void TriggerShake(float duration, float magnitude)
     {
         shakeDuration = duration;
+        // La magnitud para rotación suele necesitar ser mayor que para posición.
+        // Si antes usabas 0.5, ahora prueba con 5.0 o 10.0 grados.
         shakeMagnitude = magnitude;
-        dampingSpeed = 1.0f;
+        dampingSpeed = 2.0f; // Un poco más rápido para que vibre
     }
 }
