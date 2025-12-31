@@ -1,4 +1,5 @@
 using UnityEngine;
+using Unity.Netcode;
 
 public class KillZone : MonoBehaviour
 {
@@ -8,28 +9,41 @@ public class KillZone : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
+        // Solo el Servidor tiene autoridad
+        if (!NetworkManager.Singleton.IsServer) return;
+
         // --- CASO 1: JUGADOR ---
-        // Buscamos si el objeto es un jugador o parte de él
         PlayerHealth playerParams = other.GetComponentInParent<PlayerHealth>();
 
         if (playerParams != null)
         {
-            // Solo matamos si está vivo para evitar errores con ragdolls muertos cayendo
-            if (playerParams.currentHealth > 0)
+            if (!playerParams.isDead)
             {
-                Debug.Log($"Jugador {other.name} cayó al vacío.");
-                playerParams.TakeDamage(9999f, null); // Muerte instantánea
+                Debug.Log($"Servidor: Jugador {other.name} cayó al vacío.");
+
+                // --- CORRECCIÓN: USAR EL NUEVO SISTEMA DE DAÑO ---
+                // Creamos un daño de 9999, con fuerza 0 (porque solo cae)
+                DamageInfo fallDamage = new DamageInfo(
+                    9999f,                      // Daño mortal
+                    other.transform.position,   // Punto
+                    Vector3.zero,               // Dirección (irrelevante)
+                    0f,                         // Fuerza 0 (para que el ragdoll no salga volando, solo caiga)
+                    false,                      // No es explosión
+                    0f,                         // Radio 0
+                    9999                        // ID 9999 = Entorno / Vacío
+                );
+
+                playerParams.TakeDamage(fallDamage);
             }
-            return; // Salimos, ya procesamos esto
+            return;
         }
 
         // --- CASO 2: BOMBA ---
-        // Buscamos si es la bomba
         BombController bomb = other.GetComponentInParent<BombController>();
 
         if (bomb != null)
         {
-            Debug.Log("¡La bomba cayó al vacío! Respawneando...");
+            Debug.Log("Servidor: ¡La bomba cayó al vacío! Respawneando...");
             ResetBombPosition(bomb);
         }
     }
@@ -45,16 +59,14 @@ public class KillZone : MonoBehaviour
         }
         else if (GameManager.Instance != null && GameManager.Instance.spawnPointBomb != null)
         {
-            // Usamos el spawn global definido en el GameManager
             targetPos = GameManager.Instance.spawnPointBomb.position;
         }
         else
         {
-            targetPos = new Vector3(0, 5, 0); // Fallback por si todo falla
+            targetPos = new Vector3(0, 5, 0);
         }
 
-        // 2. Manipular Físicas (IMPORTANTE)
-        // Hay que frenarla en seco, si no conservará la velocidad de caída y saldrá disparada hacia abajo al respawnear.
+        // 2. Manipular Físicas
         Rigidbody rb = bomb.GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -64,8 +76,5 @@ public class KillZone : MonoBehaviour
 
         // 3. Teletransporte
         bomb.transform.position = targetPos;
-
-        // Opcional: ¿Quieres resetear el timer de la bomba si cae? 
-        // Por ahora solo reseteamos posición para que siga la tensión.
     }
 }

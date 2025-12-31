@@ -1,66 +1,70 @@
 ﻿using UnityEngine;
+using Unity.Netcode.Components;
 
 public class RagdollManager : MonoBehaviour
 {
     [Header("Referencias")]
     public CharacterController controller;
     public Rigidbody mainRb;
-    public PlayerLook playerLook;
+    public MonoBehaviour playerLook;
     public CapsuleCollider physicsCollider;
-    private PlayerMotor playerMotor;
+    public MonoBehaviour playerMotor;
 
-    [Header("Configuración Killcam (Estilo TF2)")]
+    [Header("Configuración Killcam")]
     public float cameraDistance = 15f;
     public float cameraHeight = 0.5f;
     public float positionDamp = 0.1f;
     public float rotationSpeed = 10f;
-
-    [Header("Colisión de Cámara")]
     public LayerMask wallLayers;
-    public float wallOffset = 0.3f;
-    public float cameraCollisionRadius = 0.2f; // NUEVO: Radio de la "esfera" de la cámara
 
-    // Estado interno
     private bool isRagdollActive = false;
-    private Transform currentKiller;
-    private Vector3 lastKillerPos;
+    private bool isMineLocal = false;
     private Vector3 currentVelRef;
+    private Vector3 killCamFocus;
 
-    void Start()
+    private NetworkTransform netTransform;
+    private NetworkRigidbody netRigidbody;
+    private Animator anim;
+
+    void Awake()
     {
+        netTransform = GetComponent<NetworkTransform>();
+        netRigidbody = GetComponent<NetworkRigidbody>();
+        anim = GetComponent<Animator>();
         if (controller == null) controller = GetComponent<CharacterController>();
         if (mainRb == null) mainRb = GetComponent<Rigidbody>();
-        if (playerLook == null) playerLook = GetComponent<PlayerLook>();
-        playerMotor = GetComponent<PlayerMotor>();
-
+        if (playerLook == null) playerLook = GetComponent("PlayerLook") as MonoBehaviour;
+        if (playerMotor == null) playerMotor = GetComponent("PlayerMotor") as MonoBehaviour;
         if (physicsCollider != null) physicsCollider.enabled = false;
     }
 
     void LateUpdate()
     {
-        if (!isRagdollActive) return;
+        if (!isRagdollActive || !isMineLocal) return;
         UpdateKillCam();
     }
 
-    public void ActivateRagdoll(Transform killer)
+    public void ActivateRagdoll(DamageInfo info, bool isMine)
     {
-        currentKiller = killer;
-        if (currentKiller != null) lastKillerPos = currentKiller.position;
-        else lastKillerPos = transform.position + transform.forward * 5f;
+        isMineLocal = isMine;
+        isRagdollActive = true;
 
-        Vector3 momentum = Vector3.zero;
-        if (controller != null) momentum = controller.velocity;
+        if (anim != null) anim.enabled = false;
+        if (netTransform != null) netTransform.enabled = false;
+        if (netRigidbody != null) netRigidbody.enabled = false;
+        if (playerMotor != null) playerMotor.enabled = false;
+        if (controller != null) controller.enabled = false;
 
-        if (playerLook != null)
+        // CORRECCIÓN 1: Usar PointOfImpact en lugar de Point
+        killCamFocus = info.IsExplosion ? info.PointOfImpact : (transform.position - info.ForceDirection * 5f);
+
+        if (isMineLocal)
         {
-            playerLook.enabled = false;
+            if (playerLook != null) playerLook.enabled = false;
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
+            if (Camera.main != null) Camera.main.transform.parent = null;
         }
-        if (playerMotor != null) playerMotor.enabled = false;
-
-        // IMPORTANTE: Al apagar esto, el PlayerAudio dejará de sonar (ver script de audio abajo)
-        if (controller != null) controller.enabled = false;
 
         if (physicsCollider != null) physicsCollider.enabled = true;
 
@@ -71,104 +75,67 @@ public class RagdollManager : MonoBehaviour
             mainRb.constraints = RigidbodyConstraints.None;
             mainRb.mass = 80f;
             mainRb.drag = 0.05f;
-            mainRb.angularDrag = 0.05f;
-            mainRb.velocity = momentum;
-            mainRb.AddTorque(Random.insideUnitSphere * 20f, ForceMode.Impulse);
-            mainRb.AddForce(Vector3.up * 2f, ForceMode.Impulse);
+            mainRb.velocity = Vector3.zero;
+
+            if (info.IsExplosion)
+            {
+                // CORRECCIÓN 2: Usar ForceMagnitude y PointOfImpact
+                mainRb.AddExplosionForce(info.ForceMagnitude, info.PointOfImpact, info.ExplosionRadius, 1f, ForceMode.Impulse);
+                mainRb.AddTorque(Random.insideUnitSphere * (info.ForceMagnitude * 0.05f), ForceMode.Impulse);
+            }
+            else
+            {
+                // CORRECCIÓN 3: Usar ForceDirection, ForceMagnitude y PointOfImpact
+                mainRb.AddForceAtPosition(info.ForceDirection.normalized * info.ForceMagnitude, info.PointOfImpact, ForceMode.Impulse);
+            }
         }
-
-        if (Camera.main != null) Camera.main.transform.parent = null;
-
-        isRagdollActive = true;
     }
 
     private void UpdateKillCam()
     {
         if (Camera.main == null) return;
+        Vector3 center = transform.position + Vector3.up;
 
-        if (currentKiller != null) lastKillerPos = currentKiller.position;
+        Vector3 dirFromFocus = (center - killCamFocus).normalized;
+        if (dirFromFocus == Vector3.zero) dirFromFocus = transform.forward;
 
-        Vector3 ragdollCenter = transform.position + Vector3.up * 1.0f;
+        Vector3 targetPos = center + (dirFromFocus * cameraDistance) + (Vector3.up * cameraHeight);
+        Vector3 smoothedPos = Vector3.SmoothDamp(Camera.main.transform.position, targetPos, ref currentVelRef, positionDamp);
 
-        // 1. Dirección y Objetivo Base
-        Vector3 dirFromKiller = (ragdollCenter - lastKillerPos).normalized;
-        if (dirFromKiller == Vector3.zero) dirFromKiller = transform.forward;
-
-        Vector3 targetPos = ragdollCenter + (dirFromKiller * cameraDistance) + (Vector3.up * cameraHeight);
-
-        // --- NOTA: YA NO APLICAMOS EL SHAKE AQUÍ ---
-
-        // 2. Suavizado de Movimiento (SmoothDamp)
-        Vector3 smoothedPos = Vector3.SmoothDamp(
-            Camera.main.transform.position,
-            targetPos,
-            ref currentVelRef,
-            positionDamp
-        );
-
-        // 3. Colisión con Paredes (SphereCast)
         RaycastHit hit;
-        Vector3 dirToCamera = smoothedPos - ragdollCenter;
-        float distToCamera = dirToCamera.magnitude;
-
-        // IMPORTANTE: Nos aseguramos de que el SphereCast NO choque con el ragdoll (capa Player o Default)
-        // Usamos la máscara wallLayers que definiste. Asegúrate en el inspector que "Player" NO esté marcado en wallLayers.
-        Vector3 finalPos = smoothedPos;
-
-        if (Physics.SphereCast(ragdollCenter, cameraCollisionRadius, dirToCamera.normalized, out hit, distToCamera, wallLayers))
+        if (Physics.SphereCast(center, 0.2f, (smoothedPos - center).normalized, out hit, Vector3.Distance(center, smoothedPos), wallLayers))
         {
-            finalPos = hit.point + (hit.normal * wallOffset);
+            smoothedPos = hit.point + (hit.normal * 0.3f);
         }
 
-        // 4. ELIMINAMOS EL SHAKE DE POSICIÓN
-        // Vector3 finalPos = smoothedPos; <--- Ya no sumamos shake aquí
-        Camera.main.transform.position = finalPos; // Posición limpia y segura contra paredes
-
-        // 5. APLICAR SHAKE DE ROTACIÓN
-        Quaternion targetLook = Quaternion.LookRotation(lastKillerPos - Camera.main.transform.position);
-
-        // Calculamos la rotación base suave
-        Quaternion smoothedRotation = Quaternion.Slerp(
-            Camera.main.transform.rotation,
-            targetLook,
-            Time.deltaTime * rotationSpeed
-        );
-
-        // Le sumamos el terremoto
-        if (CameraShake.Instance != null)
-        {
-            // Convertimos el Vector3 de shake a Quaternion y lo multiplicamos
-            Quaternion shakeRot = Quaternion.Euler(CameraShake.Instance.CurrentShakeRotation);
-            Camera.main.transform.rotation = smoothedRotation * shakeRot;
-        }
-        else
-        {
-            Camera.main.transform.rotation = smoothedRotation;
-        }
+        Camera.main.transform.position = smoothedPos;
+        Quaternion targetLook = Quaternion.LookRotation(killCamFocus - Camera.main.transform.position);
+        Camera.main.transform.rotation = Quaternion.Slerp(Camera.main.transform.rotation, targetLook, Time.deltaTime * rotationSpeed);
     }
 
-    public void DeactivateRagdoll()
+    public void DeactivateRagdoll(bool isMine)
     {
         isRagdollActive = false;
+        isMineLocal = false;
 
+        if (anim != null) anim.enabled = true;
+        if (netTransform != null) netTransform.enabled = true;
+        if (netRigidbody != null) netRigidbody.enabled = true;
         if (physicsCollider != null) physicsCollider.enabled = false;
 
         if (mainRb != null)
         {
             mainRb.velocity = Vector3.zero;
-            mainRb.angularVelocity = Vector3.zero;
-            mainRb.Sleep();
             mainRb.isKinematic = true;
             mainRb.constraints = RigidbodyConstraints.FreezeRotation;
         }
 
-        Vector3 currentRot = transform.rotation.eulerAngles;
-        transform.rotation = Quaternion.Euler(0f, currentRot.y, 0f);
+        transform.rotation = Quaternion.Euler(0f, transform.rotation.eulerAngles.y, 0f);
 
-        if (Camera.main != null)
+        if (isMine && Camera.main != null)
         {
             Camera.main.transform.SetParent(transform);
-            Camera.main.transform.localPosition = new Vector3(0, 0.8f, 0);
+            Camera.main.transform.localPosition = new Vector3(0, 0.6f, 0);
             Camera.main.transform.localRotation = Quaternion.identity;
         }
     }

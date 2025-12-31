@@ -1,42 +1,80 @@
 using UnityEngine;
+using Unity.Netcode;
 
-public class TeamSelectionUI : MonoBehaviour
+public class TeamSelectionUI : NetworkBehaviour
 {
-    // Opcional: Referencia al panel para ocultarlo al elegir
-    public GameObject teamSelectionPanel;
+    [Header("Referencias")]
+    public GameObject panelEquipos;
+    public GameObject playerPrefab; // Usamos tu prefab único
+    public Transform spawnAzul;
+    public Transform spawnRojo;
 
-    public void OnClickTeamA()
+    [Header("Solo Host")]
+    public GameObject botonIniciarPartida;
+
+    public override void OnNetworkSpawn()
     {
-        Debug.Log("Click en Equipo A");
-        if (GameManager.Instance != null)
-        {
-            // CAMBIO: Usamos SpawnLocalPlayer en lugar de RequestJoinGame
-            // Asegúrate de que tus "SpawnVolumes" en la escena tengan ID 0 (o el que uses para el equipo A)
-            GameManager.Instance.SpawnLocalPlayer(0);
+        if (panelEquipos != null) panelEquipos.SetActive(true);
 
-            // Ocultamos el menú
-            if (teamSelectionPanel != null) teamSelectionPanel.SetActive(false);
-        }
-        else
+        if (botonIniciarPartida != null)
         {
-            Debug.LogError("¡No encuentro el GameManager!");
+            botonIniciarPartida.SetActive(IsServer);
         }
     }
 
-    public void OnClickTeamB()
+    public void ClickIniciarPartida()
     {
-        Debug.Log("Click en Equipo B");
         if (GameManager.Instance != null)
         {
-            // CAMBIO: Usamos SpawnLocalPlayer
-            // Asegúrate de que tus "SpawnVolumes" del equipo B tengan ID 1
-            GameManager.Instance.SpawnLocalPlayer(1);
-
-            if (teamSelectionPanel != null) teamSelectionPanel.SetActive(false);
+            GameManager.Instance.StartMatch();
         }
-        else
+    }
+
+    public void ElegirAzul()
+    {
+        SpawnPlayerServerRpc(0, NetworkManager.Singleton.LocalClientId);
+        if (panelEquipos != null) panelEquipos.SetActive(false);
+    }
+
+    public void ElegirRojo()
+    {
+        SpawnPlayerServerRpc(1, NetworkManager.Singleton.LocalClientId);
+        if (panelEquipos != null) panelEquipos.SetActive(false);
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    private void SpawnPlayerServerRpc(int teamID, ulong clientId)
+    {
+        Vector3 pos = Vector3.zero;
+        Quaternion rot = Quaternion.identity;
+
+        // Lógica de posición
+        if (teamID == 0 && spawnAzul != null)
         {
-            Debug.LogError("¡No encuentro el GameManager!");
+            pos = spawnAzul.position;
+            rot = spawnAzul.rotation;
+        }
+        else if (teamID == 1 && spawnRojo != null)
+        {
+            pos = spawnRojo.position;
+            rot = spawnRojo.rotation;
+        }
+
+        // 1. Instanciar
+        GameObject nuevoJugador = Instantiate(playerPrefab, pos, rot);
+
+        // 2. Obtener NetworkObject
+        var netObj = nuevoJugador.GetComponent<NetworkObject>();
+
+        // 3. SPAWNEAR PRIMERO (Esto arregla el error "doesn't know its NetworkBehaviour")
+        netObj.SpawnAsPlayerObject(clientId, true);
+
+        // 4. ASIGNAR VARIABLE DESPUÉS DE SPAWNEAR
+        // Como ya está spawneado, la NetworkVariable interna se sincroniza bien.
+        PlayerTeamVisuals visualScript = nuevoJugador.GetComponent<PlayerTeamVisuals>();
+        if (visualScript != null)
+        {
+            visualScript.SetTeam(teamID);
         }
     }
 }

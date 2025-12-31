@@ -1,36 +1,71 @@
 using UnityEngine;
+using Unity.Netcode;
 
-public class PlayerTeamVisuals : MonoBehaviour
+public class PlayerTeamVisuals : NetworkBehaviour
 {
-    // Hacemos esta variable privada para que no salga en el inspector.
-    // El script la buscará solo.
     private PlayerHealth playerHealth;
 
     [Header("Configuración Visual")]
-    public Renderer targetRenderer; // AQUÍ arrastras el cuerpo 3D del personaje
+    public Renderer targetRenderer;
 
     [Header("Materiales de Equipo")]
-    public Material materialTeamA; // Material Azul/Cian
-    public Material materialTeamB; // Material Rojo/Naranja
+    public Material materialTeamA; // Pon aquí el material AZUL
+    public Material materialTeamB; // Pon aquí el material ROJO
+
+    // Por defecto nace siendo 0 (Azul)
+    public NetworkVariable<int> netTeamID = new NetworkVariable<int>(0);
 
     void Awake()
     {
-        // AUTOMATIZACIÓN: Buscamos el script de salud en este mismo objeto
         playerHealth = GetComponent<PlayerHealth>();
     }
 
+    public override void OnNetworkSpawn()
+    {
+        netTeamID.OnValueChanged += OnTeamChanged;
+        // Al nacer, aplicamos el color que tenga la variable (0 o 1)
+        UpdateVisuals(netTeamID.Value);
+    }
+
+    private void OnTeamChanged(int oldTeam, int newTeam)
+    {
+        UpdateVisuals(newTeam);
+    }
+
+    // SOBRECARGA: Si PlayerHealth llama a esto sin argumentos, usamos el valor actual
     public void UpdateVisuals()
     {
-        // Seguridad: Si no encontró el script de salud o el renderer, no hace nada
-        if (playerHealth == null || targetRenderer == null) return;
+        UpdateVisuals(netTeamID.Value);
+    }
 
-        if (playerHealth.teamID == 0) // Equipo A
+    public void UpdateVisuals(int teamID)
+    {
+        if (targetRenderer == null) return;
+
+        // Sincronizamos también el script de vida
+        if (playerHealth != null)
         {
+            playerHealth.teamID = teamID;
+        }
+
+        // --- LÓGICA CORREGIDA 0 vs 1 ---
+        if (teamID == 0)
+        {
+            // 0 = AZUL
             targetRenderer.material = materialTeamA;
         }
-        else if (playerHealth.teamID == 1) // Equipo B
+        else if (teamID == 1)
         {
+            // 1 = ROJO
             targetRenderer.material = materialTeamB;
+        }
+    }
+
+    public void SetTeam(int newTeamID)
+    {
+        if (NetworkManager.Singleton.IsServer)
+        {
+            netTeamID.Value = newTeamID;
         }
     }
 }

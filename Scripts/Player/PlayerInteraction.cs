@@ -1,55 +1,64 @@
 using UnityEngine;
+using Unity.Netcode;
 
-public class PlayerInteraction : MonoBehaviour
+public class PlayerInteraction : NetworkBehaviour
 {
     [Header("Configuración Patada")]
     public float kickRange = 3.5f;
     public float kickForce = 10f;
     public float kickCooldown = 0.6f;
-    public LayerMask interactLayers; // Default, Player (Bomba)
+    public LayerMask interactLayers;
 
     [Header("Referencias")]
     public Transform cameraHolder;
 
     private float lastKickTime;
 
-    // Esta función la llama el InputManager al presionar 'F'
+    // Solo ejecutamos input si somos el dueño
     public void OnKickInput()
     {
-        // Verificamos el Cooldown aquí
+        if (!IsOwner) return;
+
         if (Time.time >= lastKickTime + kickCooldown)
         {
-            PerformKick();
+            PerformKickLocal(); // Calculamos a quién pegar
         }
     }
 
-    void PerformKick()
+    void PerformKickLocal()
     {
         lastKickTime = Time.time;
-
-        // Aquí puedes poner: animator.SetTrigger("Kick");
 
         RaycastHit hit;
         if (Physics.SphereCast(cameraHolder.position, 0.5f, cameraHolder.forward, out hit, kickRange, interactLayers))
         {
-            // 1. Patear Bomba / Objetos Físicos
-            Rigidbody targetRb = hit.collider.GetComponent<Rigidbody>();
-            if (targetRb != null)
+            // Buscamos si el objeto tiene identidad de red
+            NetworkObject targetNetObj = hit.collider.GetComponentInParent<NetworkObject>();
+
+            if (targetNetObj != null)
             {
+                // Calculamos dirección desde nuestra cámara
                 Vector3 forceDir = (hit.point - cameraHolder.position).normalized;
-                forceDir += Vector3.up * 0.3f; // Levantar un poco
+                forceDir += Vector3.up * 0.3f;
                 forceDir.Normalize();
 
-                targetRb.AddForce(forceDir * kickForce, ForceMode.Impulse);
+                // PEDIMOS AL SERVIDOR QUE APLIQUE LA FUERZA
+                RequestKickServerRpc(targetNetObj.NetworkObjectId, forceDir * kickForce);
             }
+        }
+    }
 
-            // 2. Empujar Enemigos
-            PlayerMotor enemyMotor = hit.collider.GetComponent<PlayerMotor>();
-            if (enemyMotor != null)
+    [ServerRpc]
+    private void RequestKickServerRpc(ulong targetId, Vector3 force)
+    {
+        // El servidor busca el objeto por su ID
+        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(targetId, out NetworkObject targetObj))
+        {
+            Rigidbody targetRb = targetObj.GetComponent<Rigidbody>();
+            if (targetRb != null)
             {
-                Vector3 pushDir = cameraHolder.forward;
-                pushDir.y = 0.2f;
-                enemyMotor.AddExplosionForce(pushDir, 500f);
+                // El servidor aplica la fuerza -> NetworkTransform sincroniza el resultado
+                targetRb.AddForce(force, ForceMode.Impulse);
             }
         }
     }

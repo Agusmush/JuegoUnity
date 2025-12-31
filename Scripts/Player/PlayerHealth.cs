@@ -1,174 +1,175 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 using UnityEngine.Events;
 using System.Collections;
+using Unity.Netcode;
+using Unity.Netcode.Components;
 
-public class PlayerHealth : MonoBehaviour
+public class PlayerHealth : NetworkBehaviour
 {
-    [Header("Configuración de Salud")]
-    public float maxHealth = 100f;
-    public float currentHealth = 100f;
-    public int teamID = 0;
+    [Header("Referencias UI")]
+    public GameObject gameplayHUD;
+    private NetworkTransform netTransform;
+    private NetworkRigidbody netRigidbody;
 
-    public bool isDead = false;
-    private Transform lastAttacker;
+    [Header("ConfiguraciÃ³n de Salud")]
+    public float maxHealth = 100f;
+    public NetworkVariable<float> netHealth = new NetworkVariable<float>(100f);
+    public int teamID = 0;
+    public NetworkVariable<bool> netIsDead = new NetworkVariable<bool>(false);
+    public bool isDead => netIsDead.Value;
+
+    // AquÃ­ guardamos el golpe fatal
+    private DamageInfo fatalDamage;
 
     [Header("Eventos")]
     public UnityEvent OnDeath;
-    public UnityEvent OnRevive;
 
-    // DEBUG para InputManager
-    public Transform testKiller;
-
-    void Start()
+    private void Awake()
     {
-        currentHealth = maxHealth;
-        UpdateVisuals();
-        UpdateUI();
-
-        if (UIManager.Instance != null)
-            UIManager.Instance.ToggleGameplayHUD(true);
+        netTransform = GetComponent<NetworkTransform>();
+        netRigidbody = GetComponent<NetworkRigidbody>();
     }
+
+    public override void OnNetworkSpawn()
+    {
+        netHealth.OnValueChanged += OnHealthChanged;
+        if (IsOwner && gameplayHUD != null)
+        {
+            gameplayHUD.SetActive(true);
+            UpdateLocalHUD(netHealth.Value);
+        }
+    }
+
+    public override void OnNetworkDespawn() => netHealth.OnValueChanged -= OnHealthChanged;
+    private void OnHealthChanged(float old, float val) { if (IsOwner) UpdateLocalHUD(val); }
+    private void UpdateLocalHUD(float val) { if (UIManager.Instance != null) UIManager.Instance.UpdateHealth(val, maxHealth); }
 
     public void OnDebugKill()
     {
-        TakeDamage(maxHealth * 10f);
+        if (!IsServer) return;
+        DamageInfo debugDmg = new DamageInfo(1000f, transform.position + Vector3.up, Vector3.down, 10000f, false, 0, 999);
+        TakeDamage(debugDmg);
     }
 
-    public void TakeDamage(float amount, Transform attacker = null)
+    // --- SISTEMA DE DAÃ‘O ---
+    public void TakeDamage(DamageInfo info)
     {
-        if (isDead) return;
+        if (!IsServer || netIsDead.Value) return;
 
-        if (attacker != null) lastAttacker = attacker;
+        netHealth.Value -= info.DamageAmount;
 
-        currentHealth -= amount;
-        UpdateUI();
-
-        if (currentHealth <= 0 && !isDead)
+        if (netHealth.Value <= 0)
         {
-            currentHealth = 0;
-            Die();
+            netHealth.Value = 0;
+            fatalDamage = info;
+            DieServerLogic();
         }
     }
-    public void TakeDamage(float amount) { TakeDamage(amount, null); }
 
-    private void Die()
+    private void DieServerLogic()
     {
-        isDead = true;
-        OnDeath?.Invoke();
+        netIsDead.Value = true;
 
+        if (GameManager.Instance != null)
+        {
+            // Registrar punto
+            int losingSide = (teamID == 0) ? -1 : 1;
+            GameManager.Instance.RegisterPoint(losingSide);
+        }
+
+        try
+        {
+            if (TryGetComponent(out BombCarrier carrier) && carrier.isCarrying.Value) carrier.ForceDropBomb();
+        }
+        catch { }
+
+        if (netTransform != null) netTransform.enabled = false;
+        if (netRigidbody != null) netRigidbody.enabled = false;
+
+        DieClientRpc(fatalDamage);
+        StartCoroutine(WaitAndRespawnServer());
+    }
+
+    [ClientRpc]
+    private void DieClientRpc(DamageInfo info)
+    {
+        if (netTransform != null) netTransform.enabled = false;
+        if (netRigidbody != null) netRigidbody.enabled = false;
+
+        if (IsOwner)
+        {
+            if (gameplayHUD != null) gameplayHUD.SetActive(false);
+            OnDeath?.Invoke();
+            if (TryGetComponent(out InputManager inputMgr)) inputMgr.enabled = false;
+            if (TryGetComponent(out PlayerLook look)) look.enabled = false;
+        }
         if (TryGetComponent(out CharacterController cc)) cc.enabled = false;
         if (TryGetComponent(out PlayerMotor motor)) motor.enabled = false;
 
-        // Activar Ragdoll si tienes el script
-        if (TryGetComponent(out RagdollManager ragdoll)) ragdoll.ActivateRagdoll(lastAttacker);
-
-        if (TryGetComponent(out BombCarrier carrier) && carrier.isCarrying) carrier.DropBomb();
-
-        // Desactivar Input y Cámara
-        if (TryGetComponent(out InputManager inputMgr)) inputMgr.enabled = false;
-        if (TryGetComponent(out PlayerLook look)) look.enabled = false;
-
-        if (UIManager.Instance != null) UIManager.Instance.ToggleGameplayHUD(false);
-
-        if (GameManager.Instance != null) StartCoroutine(WaitAndRespawn());
+        // ACTIVAR RAGDOLL
+        if (TryGetComponent(out RagdollManager ragdoll))
+        {
+            ragdoll.ActivateRagdoll(info, IsOwner);
+        }
     }
 
-    IEnumerator WaitAndRespawn()
+    IEnumerator WaitAndRespawnServer()
     {
         yield return new WaitForSeconds(4.0f);
-
-        // --- LÓGICA DE RESPAWN CONDICIONAL ---
-        if (GameManager.Instance != null)
+        if (IsServer && GameManager.Instance != null && !GameManager.Instance.isChaosPhase)
         {
-            // Solo revivimos si NO estamos en la fase de caos
-            if (!GameManager.Instance.isChaosPhase)
-            {
-                GameManager.Instance.RespawnSinglePlayer(this);
-            }
-            // Si estamos en caos, no hacemos nada. 
-            // El jugador se queda muerto hasta que empiece la siguiente ronda 
-            // y el GameManager llame a 'RespawnSinglePlayer' manualmente en FASE 1.
+            Vector3 spawnPos = GameManager.Instance.GetRandomSpawnPosition(teamID);
+            netIsDead.Value = false;
+            netHealth.Value = maxHealth;
+            transform.position = spawnPos;
+
+            if (netTransform != null) netTransform.enabled = true;
+            if (netRigidbody != null) netRigidbody.enabled = true;
+
+            ForceRespawnClientRpc(spawnPos, Quaternion.identity);
         }
+    }
+
+    [ClientRpc]
+    public void ForceRespawnClientRpc(Vector3 pos, Quaternion rot) { StartCoroutine(RespawnSequence(pos, rot)); }
+
+    private IEnumerator RespawnSequence(Vector3 pos, Quaternion rot)
+    {
+        var cc = GetComponent<CharacterController>();
+        if (cc != null) cc.enabled = false;
+
+        var rb = GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            rb.velocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.isKinematic = true;
+            rb.useGravity = false;
+            rb.constraints = RigidbodyConstraints.FreezeRotation;
+        }
+
+        transform.position = pos; transform.rotation = rot; Physics.SyncTransforms();
+        yield return new WaitForFixedUpdate();
+
+        if (netTransform != null) netTransform.enabled = true;
+        if (netRigidbody != null) netRigidbody.enabled = true;
+
+        ResetPlayer();
+
+        if (cc != null) cc.enabled = true;
+        if (TryGetComponent(out PlayerMotor motor)) { motor.enabled = true; motor.ResetMotion(); }
     }
 
     public void ResetPlayer()
     {
-        isDead = false;
-        currentHealth = maxHealth;
-
-        // 1. Apagar todo lo que mueva al personaje
-        if (TryGetComponent(out CharacterController cc)) cc.enabled = false;
-        if (TryGetComponent(out PlayerMotor motor)) motor.enabled = false;
-
-        // 2. Apagar Ragdoll y limpiar físicas
-        if (TryGetComponent(out RagdollManager ragdoll)) ragdoll.DeactivateRagdoll();
-        if (TryGetComponent(out Rigidbody rb))
+        if (TryGetComponent(out RagdollManager ragdoll)) ragdoll.DeactivateRagdoll(IsOwner);
+        if (IsOwner)
         {
-            rb.velocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
+            if (gameplayHUD != null) gameplayHUD.SetActive(true);
+            if (TryGetComponent(out InputManager inputMgr)) inputMgr.enabled = true;
+            if (TryGetComponent(out PlayerLook look)) { look.enabled = true; look.cam.transform.localRotation = Quaternion.identity; Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false; }
+            if (UIManager.Instance != null) { UIManager.Instance.UpdateHealth(maxHealth, maxHealth); UIManager.Instance.ToggleGameplayHUD(true); }
         }
-
-        // 3. PRIMER FORZADO DE ROTACIÓN
-        transform.rotation = Quaternion.identity;
-
-        // Reactivar lógica
-        if (TryGetComponent(out InputManager inputMgr)) inputMgr.enabled = true;
-
-        if (TryGetComponent(out PlayerLook look))
-        {
-            look.enabled = true;
-            // Reiniciar rotación de la cámara (cabeza)
-            look.cam.transform.localRotation = Quaternion.identity;
-            look.transform.localRotation = Quaternion.identity; // Reiniciar cuerpo visual si rota separado
-
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-        }
-
-        if (UIManager.Instance != null) UIManager.Instance.ToggleGameplayHUD(true);
-        UpdateVisuals();
-        UpdateUI();
-
-        // Iniciamos la secuencia de "Enderezado"
-        StartCoroutine(ReviveSequence());
-    }
-
-    IEnumerator ReviveSequence()
-    {
-        // --- CORRECCIÓN 2: LA SOLUCIÓN NUCLEAR ANTI-INCLINACIÓN ---
-
-        // Esperamos un tiempo real, no solo un frame.
-        // Esto da tiempo a que el Ragdoll termine de desaparecer por completo.
-        yield return new WaitForSeconds(0.1f);
-
-        // SEGUNDO FORZADO DE ROTACIÓN (El de seguridad)
-        transform.rotation = Quaternion.identity;
-        Physics.SyncTransforms(); // Obliga a Unity a aplicar esto YA
-
-        yield return new WaitForFixedUpdate();
-
-        // Ahora sí, encendemos el motor y el controller
-        if (TryGetComponent(out PlayerMotor motor))
-        {
-            motor.enabled = true;
-            motor.ResetMotion();
-        }
-
-        if (TryGetComponent(out CharacterController cc)) cc.enabled = true;
-    }
-
-    private void UpdateVisuals()
-    {
         if (TryGetComponent(out PlayerTeamVisuals visuals)) visuals.UpdateVisuals();
-    }
-    private void UpdateUI()
-    {
-        if (UIManager.Instance != null) UIManager.Instance.UpdateHealth(currentHealth, maxHealth);
-    }
-    public void Heal(float amount)
-    {
-        currentHealth += amount;
-        if (currentHealth > maxHealth) currentHealth = maxHealth;
-        UpdateUI();
     }
 }

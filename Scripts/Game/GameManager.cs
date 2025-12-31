@@ -1,10 +1,10 @@
 ﻿using UnityEngine;
 using UnityEngine.Events;
-using UnityEngine.SceneManagement; // <--- NECESARIO PARA REINICIAR
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Netcode;
 
-public class GameManager : MonoBehaviour
+public class GameManager : NetworkBehaviour
 {
     public static GameManager Instance;
 
@@ -16,36 +16,33 @@ public class GameManager : MonoBehaviour
     [Header("Puntuación")]
     public int scoreToWin = 3;
 
-    [Header("Debug")]
-    public bool autoStartGame = false; // Si es TRUE, arranca solo (para testear rápido)
+    // --- VARIABLES DE RED ---
+    public NetworkVariable<float> netTimer = new NetworkVariable<float>(0f);
+    public NetworkVariable<int> netScoreA = new NetworkVariable<int>(0);
+    public NetworkVariable<int> netScoreB = new NetworkVariable<int>(0);
+    public NetworkVariable<int> netRoundNumber = new NetworkVariable<int>(1);
 
-    // Variables de Estado
-    public float currentTimer = 0f;
-    public int scoreTeamA = 0;
-    public int scoreTeamB = 0;
-    public bool isRoundActive = false;
+    // NUEVO: Variable que controla si estamos EN PARTIDA o EN LOBBY
+    // Esto asegura que si entras tarde, veas el HUD correctamente
+    public NetworkVariable<bool> netIsMatchActive = new NetworkVariable<bool>(false);
+
+    // Mensaje de estado sincronizado
+    public NetworkVariable<Unity.Collections.FixedString64Bytes> netGameStateMessage = new NetworkVariable<Unity.Collections.FixedString64Bytes>("");
+
+    // Estado interno
+    private bool isGameRunning = false;
+    private bool isRoundActive = false;
     public bool isChaosPhase = false;
-    public bool isGameRunning = false; // <--- NUEVO: Para saber si la partida está en curso
+
+    public float currentTimer => netTimer.Value;
 
     [Header("Referencias")]
-    public GameObject playerPrefab;
-    public BombController bombPrefab;
+    public GameObject bombPrefab;
     public Transform spawnPointBomb;
     public BombController currentBomb;
-    public Camera lobbyCamera;
-
-    public bool autoSpawnPlayer = false;
-    private PlayerHealth localPlayer;
 
     [Header("Spawns")]
     public SpawnVolume[] spawnVolumes;
-
-    [System.Serializable] public class ScoreEvent : UnityEvent<int, int> { }
-    public ScoreEvent OnScoreUpdate;
-    [System.Serializable] public class GameStateEvent : UnityEvent<string> { }
-    public GameStateEvent OnGameStateChange;
-
-    private string endMessage = "";
 
     private void Awake()
     {
@@ -53,236 +50,272 @@ public class GameManager : MonoBehaviour
         else Destroy(gameObject);
     }
 
-    private void Start()
+    public override void OnNetworkSpawn()
     {
-        // Buscar referencias iniciales
-        if (spawnPointBomb == null)
-        {
-            var spObj = GameObject.Find("SpawnPointBomb");
-            if (spObj) spawnPointBomb = spObj.transform;
-        }
+        // Suscripciones existentes
+        netTimer.OnValueChanged += (oldVal, newVal) => UpdateUITimer(newVal);
+        netScoreA.OnValueChanged += (oldVal, newVal) => UpdateUIScore();
+        netScoreB.OnValueChanged += (oldVal, newVal) => UpdateUIScore();
+        netGameStateMessage.OnValueChanged += (oldVal, newVal) => UpdateUIMessage(newVal.ToString());
+        netRoundNumber.OnValueChanged += (oldVal, newVal) => UpdateUIRound(newVal);
 
-        if (spawnVolumes == null || spawnVolumes.Length == 0)
-        {
-            spawnVolumes = FindObjectsOfType<SpawnVolume>();
-        }
+        // NUEVO: Suscripción para encender/apagar el HUD automáticamente
+        netIsMatchActive.OnValueChanged += (oldVal, newVal) => ToggleMatchHUDLocal(newVal);
 
-        // Si estamos testeando y queremos saltarnos el lobby:
-        if (autoStartGame)
+        if (IsServer)
         {
-            if (autoSpawnPlayer) SpawnLocalPlayer(0); // Spawnear dummy si hace falta
-            StartMatch();
+            if (spawnVolumes == null || spawnVolumes.Length == 0)
+                spawnVolumes = FindObjectsOfType<SpawnVolume>();
+
+            netGameStateMessage.Value = "ESPERANDO HOST...";
+            netRoundNumber.Value = 1;
+            netIsMatchActive.Value = false; // Empezamos apagados (Lobby)
         }
         else
         {
-            // ESTADO DE ESPERA / LOBBY
-            OnGameStateChange?.Invoke("ESPERANDO JUGADORES...");
-            // Aquí el juego se queda quieto hasta que alguien llame a StartMatch()
+            // Actualización inicial para clientes
+            UpdateUITimer(netTimer.Value);
+            UpdateUIScore();
+            UpdateUIMessage(netGameStateMessage.Value.ToString());
+            UpdateUIRound(netRoundNumber.Value);
+
+            // NUEVO: Forzar estado del HUD al entrar
+            ToggleMatchHUDLocal(netIsMatchActive.Value);
         }
     }
 
-    private void Update()
+    // --- HELPER LOCAL ---
+    private void ToggleMatchHUDLocal(bool isActive)
     {
-        // Solo actualizamos UI si la partida está corriendo
-        if (isGameRunning && UIManager.Instance != null)
+        if (UIManager.Instance != null)
         {
-            if (isRoundActive) UIManager.Instance.UpdateGameTimer(currentTimer);
-            else UIManager.Instance.UpdatePrepTimer(currentTimer);
+            UIManager.Instance.ToggleMatchHUD(isActive);
         }
     }
 
-    // --- ESTA FUNCIÓN SE LLAMA DESDE UN BOTÓN DE UI O CUANDO ESTÉN LISTOS ---
+    // --- UI UPDATES (Igual que antes) ---
+
+    private void UpdateUITimer(float time)
+    {
+        if (UIManager.Instance == null) return;
+
+        // Solo actualizamos si la partida está activa visualmente
+        if (netIsMatchActive.Value && isRoundActive)
+        {
+            UIManager.Instance.UpdateGameTimer(time);
+        }
+        else
+        {
+            UIManager.Instance.UpdatePrepTimer(time);
+        }
+    }
+
+    private void UpdateUIScore()
+    {
+        if (UIManager.Instance != null)
+            UIManager.Instance.UpdateScore(netScoreA.Value, netScoreB.Value);
+    }
+
+    private void UpdateUIRound(int round)
+    {
+        if (UIManager.Instance != null)
+            UIManager.Instance.UpdateRoundDisplay(round);
+    }
+
+    private void UpdateUIMessage(string msg)
+    {
+        if (UIManager.Instance == null) return;
+
+        float duration = 0f;
+        if (msg.Contains("LUCHEN") || msg.Contains("PUNTO") || msg.Contains("EMPATE"))
+        {
+            duration = 3f;
+        }
+        UIManager.Instance.ShowCenterMessage(msg, duration);
+    }
+
+    // --- GAME LOOP ---
+
     public void StartMatch()
     {
-        if (isGameRunning) return; // Ya está corriendo
-        if (AudioManager.Instance != null)
-            AudioManager.Instance.Play("MapAmbience");
+        if (!IsServer) return;
+        if (isGameRunning) return;
 
-        scoreTeamA = 0;
-        scoreTeamB = 0;
-        OnScoreUpdate?.Invoke(scoreTeamA, scoreTeamB); // Reset UI
-
-        StartCoroutine(GameLoop());
+        StartCoroutine(ServerGameLoop());
     }
 
-    // --- BUCLE PRINCIPAL ---
-    IEnumerator GameLoop()
+    IEnumerator ServerGameLoop()
     {
         isGameRunning = true;
 
-        // BUCLE DE RONDAS (Mientras nadie gane)
-        while (scoreTeamA < scoreToWin && scoreTeamB < scoreToWin)
+        // 1. ACTIVAMOS LA PARTIDA -> Esto dispara el OnValueChanged en todos los clientes
+        // y hace aparecer el HUD automáticamente.
+        netIsMatchActive.Value = true;
+
+        netScoreA.Value = 0;
+        netScoreB.Value = 0;
+        netRoundNumber.Value = 1;
+
+        while (netScoreA.Value < scoreToWin && netScoreB.Value < scoreToWin)
         {
             // FASE 1: PREPARACIÓN
             isRoundActive = false;
             isChaosPhase = false;
-            OnGameStateChange?.Invoke("PREPARADOS...");
+            netRoundNumber.Value = (netScoreA.Value + netScoreB.Value + 1);
+            netGameStateMessage.Value = "";
 
-            // Ocultar bomba anterior si quedó
             CleanupScene();
-
-            // Revivir jugadores
-            if (localPlayer != null) RespawnSinglePlayer(localPlayer);
-
-            // Reset timers visuales
-            if (UIManager.Instance != null) UIManager.Instance.ResetBombTimersVisuals();
+            RespawnAllPlayers();
 
             float timer = prepTime;
             while (timer > 0)
             {
                 timer -= Time.deltaTime;
-                currentTimer = timer;
+                netTimer.Value = timer;
                 yield return null;
             }
 
             // FASE 2: JUEGO
             SpawnBomb();
             isRoundActive = true;
-            OnGameStateChange?.Invoke("¡LUCHEN!");
+            netGameStateMessage.Value = "¡LUCHEN!";
 
             timer = roundTime;
             while (timer > 0 && isRoundActive)
             {
                 timer -= Time.deltaTime;
-                currentTimer = timer;
+                netTimer.Value = timer;
                 yield return null;
             }
 
             // FASE 3: FIN DE RONDA
             if (isRoundActive)
             {
-                OnGameStateChange?.Invoke("TIEMPO AGOTADO");
-                if (currentBomb != null) currentBomb.Explode();
-                isRoundActive = false;
-                yield return new WaitForSeconds(1f);
-            }
-            else
-            {
-                OnGameStateChange?.Invoke(endMessage);
+                netGameStateMessage.Value = "TIEMPO AGOTADO";
+                if (currentBomb != null) currentBomb.ForceExplode();
+                yield return new WaitForSeconds(2f);
             }
 
-            // FASE 4: POST-RONDA (CAOS)
+            isRoundActive = false;
             isChaosPhase = true;
+
             timer = postRoundTime;
             while (timer > 0)
             {
                 timer -= Time.deltaTime;
-                currentTimer = timer;
+                netTimer.Value = timer;
                 yield return null;
             }
         }
 
-        // --- FIN DE LA PARTIDA (SALIMOS DEL WHILE) ---
         EndMatch();
     }
 
     private void EndMatch()
     {
         isGameRunning = false;
-        string winner = (scoreTeamA >= scoreToWin) ? "EQUIPO AZUL" : "EQUIPO ROJO";
-        Color winnerColor = (scoreTeamA >= scoreToWin) ? Color.blue : Color.red;
+        bool teamAWins = netScoreA.Value >= scoreToWin;
 
-        Debug.Log("PARTIDA TERMINADA. GANADOR: " + winner);
-        OnGameStateChange?.Invoke("VICTORIA: " + winner);
+        string winnerMsg = teamAWins ? "VICTORIA: AZUL" : "VICTORIA: ROJO";
+        netGameStateMessage.Value = winnerMsg;
 
-        // Llamar a la UI de Victoria
-        if (UIManager.Instance != null)
-        {
-            UIManager.Instance.ShowVictoryScreen(winner, winnerColor);
-        }
+        Color winColor = teamAWins ? Color.blue : Color.red;
+        ShowVictoryClientRpc(winnerMsg, winColor);
 
-        // Limpiar la escena de bombas
         CleanupScene();
+
+        // Opcional: Si quieres que al terminar vuelva al Lobby y se borre el HUD:
+        // netIsMatchActive.Value = false; 
     }
 
-    // Función para llamar desde un botón de "Reiniciar" en la UI de Victoria
-    public void RestartScene()
+    [ClientRpc]
+    private void ShowVictoryClientRpc(string winnerName, Color color)
     {
-        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        if (UIManager.Instance != null)
+            UIManager.Instance.ShowVictoryScreen(winnerName, color);
     }
 
-    public void SpawnLocalPlayer(int teamID)
-    {
-        Vector3 spawnPos = GetRandomSpawnPosition(teamID);
-        GameObject newPlayer = Instantiate(playerPrefab, spawnPos, Quaternion.identity);
-        localPlayer = newPlayer.GetComponent<PlayerHealth>();
-        if (localPlayer != null) localPlayer.teamID = teamID;
+    // --- PUNTOS Y BOMBA (Igual que antes) ---
 
-        var visuals = newPlayer.GetComponent<PlayerTeamVisuals>();
-        if (visuals != null) visuals.UpdateVisuals();
-
-        newPlayer.transform.LookAt(new Vector3(0, spawnPos.y, 0));
-
-        if (lobbyCamera != null)
-        {
-            lobbyCamera.gameObject.SetActive(false); // Al apagar el objeto, se apaga el Listener
-            // O si prefieres no apagar el objeto visual:
-            // lobbyCamera.GetComponent<AudioListener>().enabled = false;
-        }
-    }
-
-    // MODIFICADO: Ahora acepta losingTeamSide = 0 (Empate)
     public void RegisterPoint(int losingTeamSide)
     {
-        if (!isRoundActive) return;
+        if (!IsServer || !isRoundActive) return;
 
-        if (losingTeamSide == 1) // Perdió B (Estaba en lado positivo)
+        if (losingTeamSide == 1)
         {
-            scoreTeamA++;
-            endMessage = "PUNTO: EQUIPO A";
+            netScoreA.Value++;
+            netGameStateMessage.Value = "PUNTO PARA AZUL";
         }
-        else if (losingTeamSide == -1) // Perdió A (Estaba en lado negativo)
+        else if (losingTeamSide == -1)
         {
-            scoreTeamB++;
-            endMessage = "PUNTO: EQUIPO B";
+            netScoreB.Value++;
+            netGameStateMessage.Value = "PUNTO PARA ROJO";
         }
-        else // losingTeamSide == 0 (EMPATE / NADIE GANA)
+        else
         {
-            // No sumamos puntos a nadie
-            endMessage = "¡DESTRUCCIÓN MUTUA!";
+            netGameStateMessage.Value = "EMPATE TÉCNICO";
         }
 
-        OnScoreUpdate?.Invoke(scoreTeamA, scoreTeamB);
         isRoundActive = false;
-    }
-
-    public void RespawnSinglePlayer(PlayerHealth player)
-    {
-        Vector3 targetPos = GetRandomSpawnPosition(player.teamID);
-        CharacterController cc = player.GetComponent<CharacterController>();
-        if (cc != null) cc.enabled = false;
-
-        player.transform.position = targetPos;
-        player.transform.rotation = Quaternion.identity;
-        player.transform.LookAt(new Vector3(0, targetPos.y, 0));
-
-        player.ResetPlayer();
     }
 
     private void SpawnBomb()
     {
-        if (currentBomb != null) Destroy(currentBomb.gameObject);
         if (bombPrefab == null) return;
+        if (currentBomb != null && currentBomb.GetComponent<NetworkObject>().IsSpawned)
+            currentBomb.GetComponent<NetworkObject>().Despawn();
 
-        Vector3 spawnPos = (spawnPointBomb != null) ? spawnPointBomb.position : new Vector3(0, 2, 0);
-        currentBomb = Instantiate(bombPrefab, spawnPos, Quaternion.identity);
+        Vector3 spawnPos = (spawnPointBomb != null) ? spawnPointBomb.position : new Vector3(0, 5, 0);
+        GameObject bombInst = Instantiate(bombPrefab, spawnPos, Quaternion.identity);
+        bombInst.GetComponent<NetworkObject>().Spawn();
+        currentBomb = bombInst.GetComponent<BombController>();
     }
 
     private void CleanupScene()
     {
-        BombController[] bombs = FindObjectsOfType<BombController>();
-        foreach (var b in bombs) Destroy(b.gameObject);
+        if (currentBomb != null && currentBomb.NetworkObject != null && currentBomb.NetworkObject.IsSpawned)
+            currentBomb.NetworkObject.Despawn();
         currentBomb = null;
     }
 
-    private Vector3 GetRandomSpawnPosition(int teamID)
+    private void RespawnAllPlayers()
+    {
+        foreach (var player in FindObjectsOfType<PlayerHealth>())
+        {
+            Vector3 targetPos = GetRandomSpawnPosition(player.teamID);
+            if (IsServer)
+            {
+                player.netHealth.Value = player.maxHealth;
+                player.netIsDead.Value = false;
+            }
+            player.ForceRespawnClientRpc(targetPos, Quaternion.identity);
+        }
+    }
+
+    public Vector3 GetRandomSpawnPosition(int teamID)
     {
         List<SpawnVolume> validVolumes = new List<SpawnVolume>();
-        foreach (var vol in spawnVolumes)
+        if (spawnVolumes != null)
         {
-            if (vol != null && vol.teamID == teamID) validVolumes.Add(vol);
+            foreach (var vol in spawnVolumes)
+                if (vol != null && vol.teamID == teamID) validVolumes.Add(vol);
         }
-        if (validVolumes.Count == 0) return spawnPointBomb != null ? spawnPointBomb.position : new Vector3(0, 5, 0);
-        return validVolumes[Random.Range(0, validVolumes.Count)].GetRandomSpawnPoint();
+
+        if (validVolumes.Count > 0)
+            return validVolumes[Random.Range(0, validVolumes.Count)].GetRandomSpawnPoint();
+
+        TeamSelectionUI teamUI = FindObjectOfType<TeamSelectionUI>();
+        if (teamUI != null)
+        {
+            if (teamID == 0 && teamUI.spawnAzul != null) return teamUI.spawnAzul.position;
+            if (teamID == 1 && teamUI.spawnRojo != null) return teamUI.spawnRojo.position;
+        }
+        return new Vector3(0, 5, 0);
+    }
+
+    public void RestartMatch()
+    {
+        if (!IsServer) return;
+        StartMatch();
     }
 }

@@ -1,10 +1,10 @@
 using UnityEngine;
+using Unity.Netcode; // Necesario
 
 [RequireComponent(typeof(Rigidbody))]
-public class BallPhysics : MonoBehaviour
+public class BallPhysics : NetworkBehaviour // Cambiamos a NetworkBehaviour
 {
     [Header("Gravedad Arcade")]
-    // 1 = Gravedad normal. 3 = Cae como piedra (Estilo Rocket League).
     public float gravityMultiplier = 3.0f;
 
     private Rigidbody rb;
@@ -16,9 +16,13 @@ public class BallPhysics : MonoBehaviour
 
     void FixedUpdate()
     {
-        // Aplicamos gravedad extra manualmente
-        // Physics.gravity.y suele ser -9.81
-        Vector3 extraGravity = Physics.gravity * (gravityMultiplier - 1f);
-        rb.AddForce(extraGravity, ForceMode.Acceleration);
+        // REGLA DE ORO: Solo el servidor toca las físicas de un objeto de red
+        if (!IsServer) return;
+
+        if (rb != null)
+        {
+            Vector3 extraGravity = Physics.gravity * (gravityMultiplier - 1f);
+            rb.AddForce(extraGravity, ForceMode.Acceleration);
+        }
     }
 }
